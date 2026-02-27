@@ -1,3 +1,5 @@
+console.log('=== Glassdoor Crawler v2.0 - Apply Method tracking enabled ===');
+
 async function scrollAndLoadMore(pages, timeout = 180000) {
   console.log(`Bắt đầu crawl ${pages} trang...`);
   const start = Date.now();
@@ -200,6 +202,12 @@ function initializeCrawler() {
             alert('Không tìm thấy việc làm hợp lệ để lưu vào CSV.');
             return;
           }
+
+          // Debug: verify header and first data row
+          console.log('CSV Header:', JSON.stringify(jobs[0]));
+          console.log('CSV First row:', JSON.stringify(jobs[1]));
+          console.log(`Tổng số cột: ${jobs[0].length}, Tổng số hàng dữ liệu: ${jobs.length - 1}`);
+
           // Lấy số job hợp lệ (trừ header)
           const validJobCount = jobs.length - 1;
           // Lấy title của trang web, loại bỏ tất cả số và dấu gạch dưới ở đầu
@@ -212,13 +220,18 @@ function initializeCrawler() {
             }
             return `"${cell.replace(/"/g, '""')}"`;
           }).join(',')).join('\n');
-          const dataStr = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csvContent);
+
+          // Use Blob with UTF-8 BOM for reliable download and Excel compatibility
+          const BOM = '\uFEFF';
+          const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+          const blobUrl = URL.createObjectURL(blob);
           const downloadAnchor = document.createElement('a');
-          downloadAnchor.setAttribute('href', dataStr);
+          downloadAnchor.setAttribute('href', blobUrl);
           downloadAnchor.setAttribute('download', `${validJobCount}_${fileTitle}.csv`);
           document.body.appendChild(downloadAnchor);
           downloadAnchor.click();
           downloadAnchor.remove();
+          URL.revokeObjectURL(blobUrl);
           alert(`Đã crawl ${validJobCount} việc làm và lưu vào CSV!`);
         } catch (e) {
           console.error(`Lỗi tạo CSV: ${e.message}`);
