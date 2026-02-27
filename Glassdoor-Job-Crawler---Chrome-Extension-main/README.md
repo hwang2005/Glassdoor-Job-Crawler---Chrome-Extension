@@ -66,6 +66,7 @@ File CSV sẽ chứa các cột theo thứ tự sau:
 * **Lương**
 * **Địa điểm**
 * **Ngày đăng**
+* **Phương thức ứng tuyển** (Easy Apply / Apply on company site)
 
 ## Tính năng
 

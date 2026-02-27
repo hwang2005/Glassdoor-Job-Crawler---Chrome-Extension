@@ -117,7 +117,7 @@ function initializeCrawler() {
       try {
         const jobElements = await scrollAndLoadMore(pageCount);
         console.log('Bắt đầu crawl...');
-        const jobs = [['Company Name', 'Job Title', 'Link', 'Salary', 'Location', 'Date Posted']];
+        const jobs = [['Company Name', 'Job Title', 'Link', 'Salary', 'Location', 'Date Posted', 'Apply Method']];
         const seenJobIds = new Set();
 
         if (!jobElements.length) {
@@ -133,6 +133,7 @@ function initializeCrawler() {
           let job_title = 'N/A';
           let salary = 'N/A';
           let link_job = 'N/A';
+          let apply_method = 'N/A';
 
           try {
             const linkElement = job.querySelector('a[data-test="job-link"]');
@@ -158,6 +159,20 @@ function initializeCrawler() {
             job_title = job.querySelector('a[class*="JobCard_jobTitle__GLyJ1"]')?.textContent.trim() || 'N/A';
             salary = job.querySelector('div[class*="JobCard_salaryEstimate__QpbTW"]')?.textContent.trim() || 'N/A';
 
+            // Detect apply method: "Easy Apply" vs "Apply on company site"
+            const easyApplyEl = job.querySelector('[class*="JobCard_easyApply"], [data-test="easyApply"], [class*="easyApply"]');
+            if (easyApplyEl) {
+              apply_method = 'Easy Apply';
+            } else {
+              // Fallback: search all text content within the job card for apply-related keywords
+              const cardText = job.innerText || '';
+              if (/easy\s*apply/i.test(cardText)) {
+                apply_method = 'Easy Apply';
+              } else {
+                apply_method = 'Apply on company site';
+              }
+            }
+
             if ([link_job, company_name, job_title, salary, location, date_post].every(val => val === 'N/A')) {
               console.log(`Việc làm ${index + 1}: Bỏ qua (tất cả trường N/A)`);
               return;
@@ -170,9 +185,10 @@ function initializeCrawler() {
             console.log(`  Lương: ${salary}`);
             console.log(`  Link: ${link_job}`);
             console.log(`  Ngày đăng: ${date_post}`);
+            console.log(`  Phương thức ứng tuyển: ${apply_method}`);
             console.log('-'.repeat(50));
 
-            jobs.push([company_name, job_title, link_job, salary, location, date_post]);
+            jobs.push([company_name, job_title, link_job, salary, location, date_post, apply_method]);
           } catch (e) {
             console.error(`Lỗi xử lý việc làm ${index + 1}: ${e.message}`);
           }
