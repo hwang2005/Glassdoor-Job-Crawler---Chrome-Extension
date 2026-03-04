@@ -1,4 +1,98 @@
-console.log('=== Glassdoor Crawler v2.0 - Apply Method tracking enabled ===');
+console.log('=== Glassdoor Crawler v2.1 - Improved Apply Method detection ===');
+
+/**
+ * Detects the job application method for a given Glassdoor job card element.
+ * Uses multiple detection strategies in priority order for resilience against
+ * Glassdoor's frequent DOM/class-name changes.
+ *
+ * Returns one of:
+ *   - "Easy Apply"
+ *   - "Apply on employer site"
+ *
+ * Detection strategies (checked in order):
+ *   1. CSS class name containing "easyApply" (partial match)
+ *   2. aria-label="Easy Apply" attribute
+ *   3. data-role-variant="featured" attribute (Glassdoor's internal marker)
+ *   4. data-test attribute containing "easyApply"
+ *   5. SVG bolt/lightning icon inside an Easy Apply badge container
+ *   6. Inner text content matching "Easy Apply" (case-insensitive)
+ */
+function detectApplyMethod(jobCardElement) {
+  // Strategy 1: CSS class-based selectors (handles hash-suffixed class names)
+  //   e.g. JobCard_easyApplyTag__kOHPS, JobCard_easyApply__xyz, etc.
+  const classBasedSelectors = [
+    '[class*="easyApply"]',
+    '[class*="EasyApply"]',
+    '[class*="easy-apply"]',
+    '[class*="easy_apply"]',
+  ];
+  for (const selector of classBasedSelectors) {
+    try {
+      if (jobCardElement.querySelector(selector)) {
+        console.log('  → Apply method detected via class selector:', selector);
+        return 'Easy Apply';
+      }
+    } catch (_) { /* ignore invalid selector errors */ }
+  }
+
+  // Strategy 2: aria-label attribute (accessibility label used by Glassdoor)
+  const ariaEasyApply = jobCardElement.querySelector('[aria-label="Easy Apply"]');
+  if (ariaEasyApply) {
+    console.log('  → Apply method detected via aria-label="Easy Apply"');
+    return 'Easy Apply';
+  }
+
+  // Strategy 3: data-role-variant="featured" (Glassdoor internal marker for Easy Apply)
+  const featuredVariant = jobCardElement.querySelector('[data-role-variant="featured"]');
+  if (featuredVariant) {
+    console.log('  → Apply method detected via data-role-variant="featured"');
+    return 'Easy Apply';
+  }
+
+  // Strategy 4: data-test attribute containing "easyApply"
+  const dataTestSelectors = [
+    '[data-test="easyApply"]',
+    '[data-test*="easy-apply"]',
+    '[data-test*="easy_apply"]',
+    '[data-test*="easyApply"]',
+  ];
+  for (const selector of dataTestSelectors) {
+    try {
+      if (jobCardElement.querySelector(selector)) {
+        console.log('  → Apply method detected via data-test selector:', selector);
+        return 'Easy Apply';
+      }
+    } catch (_) { /* ignore invalid selector errors */ }
+  }
+
+  // Strategy 5: SVG icon detection — Glassdoor renders a bolt/lightning SVG inside
+  //   the Easy Apply badge. Check for SVG elements near text containing "Easy Apply"
+  //   or inside a container whose class suggests easy-apply.
+  const svgElements = jobCardElement.querySelectorAll('svg');
+  for (const svg of svgElements) {
+    const parentEl = svg.closest('div') || svg.parentElement;
+    if (parentEl) {
+      const parentClass = parentEl.className || '';
+      const parentAriaLabel = parentEl.getAttribute('aria-label') || '';
+      if (/easy.?apply/i.test(parentClass) || /easy.?apply/i.test(parentAriaLabel)) {
+        console.log('  → Apply method detected via SVG icon in Easy Apply container');
+        return 'Easy Apply';
+      }
+    }
+  }
+
+  // Strategy 6: Full text-content fallback (catches anything we might have missed)
+  const cardText = jobCardElement.textContent || jobCardElement.innerText || '';
+  if (/easy\s*apply/i.test(cardText)) {
+    console.log('  → Apply method detected via text content fallback');
+    return 'Easy Apply';
+  }
+
+  // Default: If none of the Easy Apply indicators are found, it's an employer site apply
+  console.log('  → No Easy Apply indicator found — defaulting to "Apply on employer site"');
+  return 'Apply on employer site';
+}
+
 
 async function scrollAndLoadMore(pages, timeout = 180000) {
   console.log(`Bắt đầu crawl ${pages} trang...`);
@@ -161,19 +255,8 @@ function initializeCrawler() {
             job_title = job.querySelector('a[class*="JobCard_jobTitle__GLyJ1"]')?.textContent.trim() || 'N/A';
             salary = job.querySelector('div[class*="JobCard_salaryEstimate__QpbTW"]')?.textContent.trim() || 'N/A';
 
-            // Detect apply method: "Easy Apply" vs "Apply on company site"
-            const easyApplyEl = job.querySelector('[class*="JobCard_easyApply"], [data-test="easyApply"], [class*="easyApply"]');
-            if (easyApplyEl) {
-              apply_method = 'Easy Apply';
-            } else {
-              // Fallback: search all text content within the job card for apply-related keywords
-              const cardText = job.innerText || '';
-              if (/easy\s*apply/i.test(cardText)) {
-                apply_method = 'Easy Apply';
-              } else {
-                apply_method = 'Apply on company site';
-              }
-            }
+            // Detect apply method using multiple strategies for resilience
+            apply_method = detectApplyMethod(job);
 
             if ([link_job, company_name, job_title, salary, location, date_post].every(val => val === 'N/A')) {
               console.log(`Việc làm ${index + 1}: Bỏ qua (tất cả trường N/A)`);

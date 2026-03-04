@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Glassdoor Job Crawler",
-  "version": "2.0",
-  "description": "Crawl job listings from Glassdoor with configurable page loads displayed next to button, save to CSV",
+  "version": "2.1",
+  "description": "Crawl job listings from Glassdoor with configurable page loads, improved apply method detection (Easy Apply / Apply on employer site), save to CSV",
   "permissions": [
     "activeTab",
     "downloads",
@@ -10,9 +10,15 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://www.glassdoor.com/Job/*"],
-      "js": ["content.js"],
-      "css": ["styles.css"],
+      "matches": [
+        "https://www.glassdoor.com/Job/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "styles.css"
+      ],
       "run_at": "document_idle"
     }
   ],
