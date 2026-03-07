@@ -1,11 +1,10 @@
-[README.md](https://github.com/user-attachments/files/22353881/README.md)
 # Glassdoor Job Crawler - Chrome Extension
 
-**Phiên bản:** 1.0v
+**Phiên bản:** v2.3
 
-**Cập nhật cuối cùng:** Ngày 06 tháng 07 năm 2025
+**Cập nhật cuối cùng:** Ngày 07 tháng 03 năm 2026
 
-**Mô tả:** Một tiện ích mở rộng Chrome để thu thập danh sách việc làm từ Glassdoor và xuất chúng sang file CSV với các tùy chỉnh.
+**Mô tả:** Một tiện ích mở rộng Chrome để thu thập danh sách việc làm từ Glassdoor và xuất chúng sang file CSV. Phiên bản mới nhất được trang bị thuật toán **Nhận diện Phương thức Ứng tuyển Thông minh (Smart Apply Detection)** hoạt động đa lớp, giúp crawl dữ liệu nhanh hơn và tin cậy hơn.
 
 ## Mục lục
 
@@ -67,14 +66,19 @@ File CSV sẽ chứa các cột theo thứ tự sau:
 * **Lương**
 * **Địa điểm**
 * **Ngày đăng**
+* **Phương thức ứng tuyển** (Easy Apply / Apply on company site)
 
 ## Tính năng
 
-* Thu thập nhiều trang danh sách việc làm từ Glassdoor dựa trên đầu vào của người dùng.
-* Xuất dữ liệu sang file CSV với liên kết nhấp được.
-* Hiển thị đếm ngược số trang còn lại trong quá trình thu thập.
-* Tự động đóng popup trong quá trình thực hiện.
-* Tên file tùy chỉnh dựa trên số lượng việc làm và tiêu đề trang.
+* Thu thập nhiều trang danh sách việc làm từ Glassdoor thông qua tự động cuộn trang và tải thêm.
+* Xuất dữ liệu sang định dạng CSV chứa đầy đủ thông tin: Tên công ty, Tiêu đề, Lương, Địa điểm, Ngày đăng, Link và Phương thức Ứng tuyển.
+* **Nhận diện Phương thức Ứng tuyển Thông minh (Smart Apply Detection):** Phân loại tự động "Easy Apply" hoặc "Apply on employer site" bằng chiến lược 3 lớp tối ưu hóa tốc độ:
+  1. **Text Inspection:** Đọc trực tiếp nội dung nút bấm.
+  2. **DOM Heuristics:** Kiểm tra CSS classes hoặc URL của `<a>` tag.
+  3. **Click-capture Fallback:** Tự động click và bắt URL tab mới dưới nền ngầm, kèm timeout fallback thông minh (chỉ mở tab khi thật sự cần thiết).
+* Giao diện nhỏ gọn tích hợp trực tiếp lên màn hình trang Glassdoor, đếm ngược số trang trực quan.
+* Cơ chế tự động đóng mạnh mẽ các form, popup hay modal làm phiền của Glassdoor.
+* Đặt tên file output thông minh và an toàn hóa kí tự.
 
 ## Khắc phục sự cố
 
