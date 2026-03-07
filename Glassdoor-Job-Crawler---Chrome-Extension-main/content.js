@@ -1,98 +1,225 @@
-console.log('=== Glassdoor Crawler v2.1 - Improved Apply Method detection ===');
+console.log('=== Glassdoor Crawler v2.3 - Smart Apply Method detection ===');
 
 /**
- * Detects the job application method for a given Glassdoor job card element.
- * Uses multiple detection strategies in priority order for resilience against
- * Glassdoor's frequent DOM/class-name changes.
+ * Waits for an element matching one of the given selectors to appear in the
+ * DOM, retrying up to `maxRetries` times with a delay between checks.
  *
- * Returns one of:
- *   - "Easy Apply"
- *   - "Apply on employer site"
- *
- * Detection strategies (checked in order):
- *   1. CSS class name containing "easyApply" (partial match)
- *   2. aria-label="Easy Apply" attribute
- *   3. data-role-variant="featured" attribute (Glassdoor's internal marker)
- *   4. data-test attribute containing "easyApply"
- *   5. SVG bolt/lightning icon inside an Easy Apply badge container
- *   6. Inner text content matching "Easy Apply" (case-insensitive)
+ * @param {string[]} selectors - CSS selectors to look for
+ * @param {number} maxRetries - Number of retry attempts (default 3)
+ * @param {number} delayMs - Delay between retries in ms (default 800)
+ * @returns {Promise<Element|null>}
  */
-function detectApplyMethod(jobCardElement) {
-  // Strategy 1: CSS class-based selectors (handles hash-suffixed class names)
-  //   e.g. JobCard_easyApplyTag__kOHPS, JobCard_easyApply__xyz, etc.
-  const classBasedSelectors = [
-    '[class*="easyApply"]',
-    '[class*="EasyApply"]',
-    '[class*="easy-apply"]',
-    '[class*="easy_apply"]',
+async function waitForElement(selectors, maxRetries = 3, delayMs = 800) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    for (const sel of selectors) {
+      try {
+        const el = document.querySelector(sel);
+        if (el) return el;
+      } catch (_) { /* skip invalid selector */ }
+    }
+    if (attempt < maxRetries - 1) {
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  return null;
+}
+
+/**
+ * Dismisses any overlay / modal popup that Glassdoor might show (login
+ * prompts, "Sign up" nudges, etc.). Tries several known close-button
+ * selectors.
+ */
+async function dismissPopups() {
+  const closeSelectors = [
+    'button[aria-label="Cancel"]',
+    'button[aria-label="Close"]',
+    '[class*="CloseButton"]',
+    'button[class*="closeButton"]',
+    'button[class*="modal-close"]',
+    '[class*="Modal"] button[aria-label="Close"]',
   ];
-  for (const selector of classBasedSelectors) {
+  for (const sel of closeSelectors) {
     try {
-      if (jobCardElement.querySelector(selector)) {
-        console.log('  → Apply method detected via class selector:', selector);
-        return 'Easy Apply';
+      const btn = document.querySelector(sel);
+      if (btn && btn.offsetParent !== null) {   // visible
+        btn.click();
+        await new Promise(r => setTimeout(r, 500));
+        return true;
       }
-    } catch (_) { /* ignore invalid selector errors */ }
+    } catch (_) { /* skip */ }
+  }
+  return false;
+}
+
+/**
+ * Detects the job application method using a three-layer strategy:
+ *
+ *   Layer 1 — **Text / attribute inspection** (fastest, zero side-effects):
+ *       Reads the apply button's text and surrounding DOM to determine the
+ *       method.  Glassdoor typically labels buttons "Easy Apply" or
+ *       "Apply on employer site" / "Apply Now".
+ *
+ *   Layer 2 — **DOM class / data-attribute heuristics**:
+ *       Checks for Glassdoor-specific class names or data attributes that
+ *       hint at Easy Apply vs. external redirect.
+ *
+ *   Layer 3 — **Click-capture fallback** (last resort):
+ *       Clicks the button, captures the URL of the new tab via the
+ *       background script, then closes it.  Only used when layers 1–2
+ *       are inconclusive.
+ *
+ * @param {Element} jobCardElement - The job card DOM element
+ * @param {number} index - The zero-based index of the job in the list
+ * @returns {Promise<string>} "Easy Apply" | "Apply on employer site" | "N/A"
+ */
+async function detectApplyMethod(jobCardElement, index) {
+  // ── Step 1: Click the job card to load the detail panel ──────────────
+  const jobLink =
+    jobCardElement.querySelector('a[data-test="job-link"]') ||
+    jobCardElement.querySelector('a[class*="JobCard_jobTitle"]');
+
+  if (!jobLink) {
+    console.warn(`  [${index + 1}] No clickable job link found`);
+    return 'N/A';
   }
 
-  // Strategy 2: aria-label attribute (accessibility label used by Glassdoor)
-  const ariaEasyApply = jobCardElement.querySelector('[aria-label="Easy Apply"]');
-  if (ariaEasyApply) {
-    console.log('  → Apply method detected via aria-label="Easy Apply"');
-    return 'Easy Apply';
-  }
+  jobLink.click();
+  await new Promise(r => setTimeout(r, 1500));
+  await dismissPopups();
 
-  // Strategy 3: data-role-variant="featured" (Glassdoor internal marker for Easy Apply)
-  const featuredVariant = jobCardElement.querySelector('[data-role-variant="featured"]');
-  if (featuredVariant) {
-    console.log('  → Apply method detected via data-role-variant="featured"');
-    return 'Easy Apply';
-  }
-
-  // Strategy 4: data-test attribute containing "easyApply"
-  const dataTestSelectors = [
-    '[data-test="easyApply"]',
-    '[data-test*="easy-apply"]',
-    '[data-test*="easy_apply"]',
-    '[data-test*="easyApply"]',
+  // ── Step 2: Locate the apply button (with retries) ───────────────────
+  const applyBtnSelectors = [
+    'button[data-test="applyButton"]',
+    'a[data-test="applyButton"]',
+    'button[class*="ApplyButton"]', 'a[class*="ApplyButton"]',
+    'button[class*="applyButton"]', 'a[class*="applyButton"]',
+    'button[class*="ApplyNow"]', 'a[class*="ApplyNow"]',
+    'button[class*="applyNow"]', 'a[class*="applyNow"]',
+    'button[class*="EasyApply"]', 'a[class*="EasyApply"]',
+    'button[class*="easyApply"]', 'a[class*="easyApply"]',
   ];
-  for (const selector of dataTestSelectors) {
-    try {
-      if (jobCardElement.querySelector(selector)) {
-        console.log('  → Apply method detected via data-test selector:', selector);
-        return 'Easy Apply';
-      }
-    } catch (_) { /* ignore invalid selector errors */ }
-  }
 
-  // Strategy 5: SVG icon detection — Glassdoor renders a bolt/lightning SVG inside
-  //   the Easy Apply badge. Check for SVG elements near text containing "Easy Apply"
-  //   or inside a container whose class suggests easy-apply.
-  const svgElements = jobCardElement.querySelectorAll('svg');
-  for (const svg of svgElements) {
-    const parentEl = svg.closest('div') || svg.parentElement;
-    if (parentEl) {
-      const parentClass = parentEl.className || '';
-      const parentAriaLabel = parentEl.getAttribute('aria-label') || '';
-      if (/easy.?apply/i.test(parentClass) || /easy.?apply/i.test(parentAriaLabel)) {
-        console.log('  → Apply method detected via SVG icon in Easy Apply container');
-        return 'Easy Apply';
+  let applyButton = await waitForElement(applyBtnSelectors, 3, 1000);
+
+  // Fallback: any visible button/link in the detail panel whose text
+  // contains "Apply" (but NOT inside a job card, to avoid clicking others)
+  if (!applyButton) {
+    const candidates = document.querySelectorAll(
+      'button, a[target="_blank"], a[role="button"]'
+    );
+    for (const el of candidates) {
+      const text = (el.textContent || '').trim();
+      if (/apply/i.test(text) && !el.closest('[class*="jobCard"]')) {
+        applyButton = el;
+        break;
       }
     }
   }
 
-  // Strategy 6: Full text-content fallback (catches anything we might have missed)
-  const cardText = jobCardElement.textContent || jobCardElement.innerText || '';
-  if (/easy\s*apply/i.test(cardText)) {
-    console.log('  → Apply method detected via text content fallback');
+  if (!applyButton) {
+    console.warn(`  [${index + 1}] Apply button not found in detail panel`);
+    return 'N/A';
+  }
+
+  // ── Layer 1: Text-based detection ────────────────────────────────────
+  const btnText = (applyButton.textContent || '').trim().toLowerCase();
+  const parentText = (applyButton.parentElement?.textContent || '').trim().toLowerCase();
+
+  // Glassdoor's "Easy Apply" buttons
+  if (/easy\s*apply/i.test(btnText) || /easy\s*apply/i.test(parentText)) {
+    console.log(`  [${index + 1}] Detected via text: Easy Apply`);
     return 'Easy Apply';
   }
 
-  // Default: If none of the Easy Apply indicators are found, it's an employer site apply
-  console.log('  → No Easy Apply indicator found — defaulting to "Apply on employer site"');
-  return 'Apply on employer site';
+  // Explicit "Apply on employer site" / "Apply on company site"
+  if (/apply\s+on\s+/i.test(btnText) || /employer\s*site|company\s*site/i.test(btnText)) {
+    console.log(`  [${index + 1}] Detected via text: Apply on employer site`);
+    return 'Apply on employer site';
+  }
+
+  // ── Layer 2: DOM attribute / class heuristics ────────────────────────
+  const btnClasses = applyButton.className || '';
+  const btnDataAttrs = Array.from(applyButton.attributes)
+    .map(a => `${a.name}=${a.value}`)
+    .join(' ');
+
+  // Glassdoor often uses class names like "EasyApplyButton", "easyApply"
+  if (/easy\s*apply/i.test(btnClasses) || /easy\s*apply/i.test(btnDataAttrs)) {
+    console.log(`  [${index + 1}] Detected via class/attr: Easy Apply`);
+    return 'Easy Apply';
+  }
+
+  // <a> tags with target="_blank" that point to external sites
+  if (applyButton.tagName === 'A') {
+    const href = applyButton.getAttribute('href') || '';
+    if (href && !href.includes('glassdoor.com') && !href.startsWith('#') && !href.startsWith('/')) {
+      console.log(`  [${index + 1}] Detected via href: Apply on employer site`);
+      return 'Apply on employer site';
+    }
+    // Internal Glassdoor apply links (e.g. /apply/…) → likely Easy Apply
+    if (href.includes('/apply/') || href.includes('glassdoor.com/apply')) {
+      console.log(`  [${index + 1}] Detected via href: Easy Apply`);
+      return 'Easy Apply';
+    }
+  }
+
+  // Check the detail panel for any "Easy Apply" badge elsewhere
+  const detailPanel = document.querySelector(
+    '[class*="JobDetails"], [class*="jobDetail"], [data-test="job-details"]'
+  );
+  if (detailPanel) {
+    const panelText = detailPanel.textContent || '';
+    if (/easy\s*apply/i.test(panelText)) {
+      console.log(`  [${index + 1}] Detected via detail panel text: Easy Apply`);
+      return 'Easy Apply';
+    }
+  }
+
+  // ── Layer 3: Click-capture fallback ──────────────────────────────────
+  console.log(`  [${index + 1}] Text/DOM detection inconclusive, trying click-capture…`);
+  try {
+    const response = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ action: 'captureNewTab' }, (resp) => {
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+        else resolve(resp);
+      });
+      // Click AFTER the message is sent so background is already listening
+      setTimeout(() => applyButton.click(), 300);
+    });
+
+    // Dismiss any popup that the click may have opened in-page
+    await dismissPopups();
+
+    const url = response?.url || '';
+    const error = response?.error || null;
+
+    if (error === 'timeout') {
+      // No new tab was opened → the apply happened in-page (Easy Apply modal)
+      console.log(`  [${index + 1}] No new tab opened (timeout) → Easy Apply`);
+      return 'Easy Apply';
+    }
+
+    console.log(`  [${index + 1}] Captured URL: ${url}`);
+
+    if (!url) return 'N/A';
+
+    // Glassdoor internal / Indeed smart-apply URLs → Easy Apply
+    if (
+      url.includes('smartapply.indeed.com') ||
+      url.includes('glassdoor.com/apply') ||
+      url.includes('glassdoor.com/job-listing') // sometimes redirects internally
+    ) {
+      return 'Easy Apply';
+    }
+
+    return 'Apply on employer site';
+  } catch (err) {
+    console.error(`  [${index + 1}] captureNewTab error:`, err);
+    return 'N/A';
+  }
 }
 
+// ---------------------------------------------------------------------------
 
 async function scrollAndLoadMore(pages, timeout = 180000) {
   console.log(`Bắt đầu crawl ${pages} trang...`);
@@ -222,7 +349,10 @@ function initializeCrawler() {
           return;
         }
 
-        jobElements.forEach((job, index) => {
+        // Use for...of so we can await detectApplyMethod for each job
+        const jobArray = Array.from(jobElements);
+        for (let index = 0; index < jobArray.length; index++) {
+          const job = jobArray[index];
           let date_post = 'N/A';
           let company_name = 'N/A';
           let location = 'N/A';
@@ -245,7 +375,7 @@ function initializeCrawler() {
             const jobId = jobIdMatch ? jobIdMatch[1] : null;
             if (jobId && seenJobIds.has(jobId)) {
               console.log(`Bỏ qua việc làm trùng lặp ID: ${jobId}`);
-              return;
+              continue;
             }
             if (jobId) seenJobIds.add(jobId);
 
@@ -255,13 +385,13 @@ function initializeCrawler() {
             job_title = job.querySelector('a[class*="JobCard_jobTitle__GLyJ1"]')?.textContent.trim() || 'N/A';
             salary = job.querySelector('div[class*="JobCard_salaryEstimate__QpbTW"]')?.textContent.trim() || 'N/A';
 
-            // Detect apply method using multiple strategies for resilience
-            apply_method = detectApplyMethod(job);
-
             if ([link_job, company_name, job_title, salary, location, date_post].every(val => val === 'N/A')) {
               console.log(`Việc làm ${index + 1}: Bỏ qua (tất cả trường N/A)`);
-              return;
+              continue;
             }
+
+            // Click-based apply method detection
+            apply_method = await detectApplyMethod(job, index);
 
             console.log(`Việc làm ${index + 1}:`);
             console.log(`  Tên công ty: ${company_name}`);
@@ -277,7 +407,7 @@ function initializeCrawler() {
           } catch (e) {
             console.error(`Lỗi xử lý việc làm ${index + 1}: ${e.message}`);
           }
-        });
+        }
 
         try {
           if (jobs.length === 1) {
@@ -286,25 +416,21 @@ function initializeCrawler() {
             return;
           }
 
-          // Debug: verify header and first data row
           console.log('CSV Header:', JSON.stringify(jobs[0]));
           console.log('CSV First row:', JSON.stringify(jobs[1]));
           console.log(`Tổng số cột: ${jobs[0].length}, Tổng số hàng dữ liệu: ${jobs.length - 1}`);
 
-          // Lấy số job hợp lệ (trừ header)
           const validJobCount = jobs.length - 1;
-          // Lấy title của trang web, loại bỏ tất cả số và dấu gạch dưới ở đầu
-          let fileTitle = document.title.replace(/^\d+(?:_\d+)*_/, ''); // Loại bỏ số và dấu gạch dưới ở đầu
-          fileTitle = fileTitle.replace(/[\/\\:\*\?"<>\|]/g, '_'); // Loại bỏ ký tự không hợp lệ
-          fileTitle = encodeURIComponent(fileTitle).replace(/%[0-9A-F]{2}/gi, '_'); // Mã hóa và thay ký tự đặc biệt
+          let fileTitle = document.title.replace(/^\d+(?:_\d+)*_/, '');
+          fileTitle = fileTitle.replace(/[\/\\:\*\?"<>\|]/g, '_');
+          fileTitle = encodeURIComponent(fileTitle).replace(/%[0-9A-F]{2}/gi, '_');
           const csvContent = jobs.map(row => row.map(cell => {
             if (typeof cell === 'string' && (cell.startsWith('https://') || cell.startsWith('http://'))) {
-              return cell; // Định dạng hyperlink cho Excel
+              return cell;
             }
             return `"${cell.replace(/"/g, '""')}"`;
           }).join(',')).join('\n');
 
-          // Use Blob with UTF-8 BOM for reliable download and Excel compatibility
           const BOM = '\uFEFF';
           const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
           const blobUrl = URL.createObjectURL(blob);
