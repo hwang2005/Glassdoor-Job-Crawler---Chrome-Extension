@@ -111,3 +111,56 @@
   border-radius: 12px;
   white-space: nowrap;
 }
+
+/* ── Location-filter row ──────────────────────────────── */
+.crawl-location-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.crawl-location-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  white-space: nowrap;
+}
+
+.crawl-location-input {
+  flex: 1;
+  min-width: 140px;
+  padding: 5px 8px;
+  font-size: 13px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.crawl-location-input:focus {
+  border-color: #6a1b9a;
+  box-shadow: 0 0 0 2px rgba(106, 27, 154, 0.2);
+}
+
+.crawl-location-save {
+  padding: 5px 10px;
+  font-size: 13px;
+  background-color: #6a1b9a;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+.crawl-location-save:hover {
+  background-color: #4a148c;
+}
+
+.crawl-location-badge {
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #fff;
+  background-color: #757575;
+  border-radius: 12px;
+  white-space: nowrap;
+}

@@ -1,4 +1,4 @@
-console.log('=== Glassdoor Crawler v2.6 - Chunked load→crawl with page cap ===');
+console.log('=== Glassdoor Crawler v2.7 - Location filter ===');
 
 // Number of concurrent apply-method detections per batch.
 // Increasing this speeds up crawling but may trigger Glassdoor rate-limits.
@@ -8,6 +8,30 @@ const BATCH_SIZE = 3;
 // After loading this many pages the crawler processes the new cards before
 // loading more.  Keeping this small avoids overwhelming the DOM.
 const PAGES_PER_BATCH = 5;
+
+/**
+ * Returns true if the extension context is still valid.
+ * After an extension reload / update the old content-script stays in the
+ * page but `chrome.runtime` is torn down, causing
+ * "Extension context invalidated" errors.
+ */
+function isExtensionContextValid() {
+  try {
+    return !!(chrome.runtime && chrome.runtime.id);
+  } catch (_) {
+    return false;
+  }
+}
+
+function requireValidContext() {
+  if (!isExtensionContextValid()) {
+    alert(
+      'Extension was reloaded. Please refresh this page (F5) to use the crawler.'
+    );
+    return false;
+  }
+  return true;
+}
 
 /**
  * Waits for an element matching one of the given selectors to appear in the
@@ -325,6 +349,7 @@ async function scrollAndLoadMore(pages, timeout = 180000) {
 }
 
 function updatePageCountDisplay() {
+  if (!isExtensionContextValid()) return;
   console.log('Cập nhật hiển thị số trang...');
   chrome.storage.local.get(['pageCount'], (result) => {
     const pageCount = parseInt(result.pageCount, 10) || 1;
@@ -335,6 +360,7 @@ function updatePageCountDisplay() {
 }
 
 function savePageCount() {
+  if (!requireValidContext()) return;
   const pageInput = document.getElementById('pageInput');
   const pageCount = parseInt(pageInput.value, 10) || 1;
   console.log(`Đã nhập số trang: ${pageCount}`);
@@ -348,6 +374,7 @@ function savePageCount() {
  * Loads the exclude-keywords string from storage and populates the input.
  */
 function updateExcludeKeywordsDisplay() {
+  if (!isExtensionContextValid()) return;
   chrome.storage.local.get(['excludeKeywords'], (result) => {
     const keywords = result.excludeKeywords || '';
     const input = document.getElementById('excludeKeywordsInput');
@@ -365,6 +392,7 @@ function updateExcludeKeywordsDisplay() {
  * Saves the comma-separated exclude-keywords string to storage.
  */
 function saveExcludeKeywords() {
+  if (!requireValidContext()) return;
   const input = document.getElementById('excludeKeywordsInput');
   const raw = input ? input.value : '';
   // Normalise: trim each keyword, drop empties, rejoin
@@ -384,6 +412,52 @@ function shouldExcludeJob(jobData, excludeKeywords) {
   if (!excludeKeywords || excludeKeywords.length === 0) return false;
   const title = (jobData.job_title || '').toLowerCase();
   return excludeKeywords.some(kw => title.includes(kw.toLowerCase()));
+}
+
+/**
+ * Loads the location-filter string from storage and populates the input.
+ */
+function updateLocationFilterDisplay() {
+  if (!isExtensionContextValid()) return;
+  chrome.storage.local.get(['locationFilter'], (result) => {
+    const locations = result.locationFilter || '';
+    const input = document.getElementById('locationFilterInput');
+    if (input) input.value = locations;
+    const badge = document.getElementById('locationFilterBadge');
+    if (badge) {
+      const count = locations ? locations.split(',').map(l => l.trim()).filter(Boolean).length : 0;
+      badge.textContent = count > 0 ? `📍 ${count} location(s)` : 'All locations';
+      badge.style.backgroundColor = count > 0 ? '#6a1b9a' : '#757575';
+    }
+  });
+}
+
+/**
+ * Saves the comma-separated location-filter string to storage.
+ */
+function saveLocationFilter() {
+  if (!requireValidContext()) return;
+  const input = document.getElementById('locationFilterInput');
+  const raw = input ? input.value : '';
+  // Normalise: trim each location, drop empties, rejoin
+  const cleaned = raw.split(',').map(l => l.trim()).filter(Boolean).join(', ');
+  chrome.storage.local.set({ locationFilter: cleaned }, () => {
+    console.log(`Location filter saved: "${cleaned}"`);
+    if (input) input.value = cleaned;
+    updateLocationFilterDisplay();
+  });
+}
+
+/**
+ * Returns true if the job should be INCLUDED based on the location filter.
+ * If the filter list is empty, all jobs are included.
+ * Checks job location (case-insensitive, substring match).
+ */
+function shouldIncludeByLocation(jobData, locationFilters) {
+  if (!locationFilters || locationFilters.length === 0) return true;
+  const loc = (jobData.location || '').toLowerCase();
+  if (!loc || loc === 'n/a') return false;
+  return locationFilters.some(lf => loc.includes(lf.toLowerCase()));
 }
 
 function initializeCrawler() {
@@ -464,16 +538,51 @@ function initializeCrawler() {
   mainRow.appendChild(saveButton);
   mainRow.appendChild(pageLabel);
 
+  // ── Location-filter row ──────────────────────────────────────────────
+  const locationRow = document.createElement('div');
+  locationRow.className = 'crawl-location-row';
+
+  const locationLabel = document.createElement('label');
+  locationLabel.textContent = 'Location filter:';
+  locationLabel.setAttribute('for', 'locationFilterInput');
+  locationLabel.className = 'crawl-location-label';
+
+  const locationInput = document.createElement('input');
+  locationInput.id = 'locationFilterInput';
+  locationInput.type = 'text';
+  locationInput.placeholder = 'e.g. Vietnam, Ho Chi Minh, Hanoi';
+  locationInput.className = 'crawl-location-input';
+
+  const locationSaveBtn = document.createElement('button');
+  locationSaveBtn.textContent = 'Save';
+  locationSaveBtn.id = 'saveLocationFilterBtn';
+  locationSaveBtn.className = 'crawl-location-save';
+  locationSaveBtn.setAttribute('aria-label', 'Save location filter');
+  locationSaveBtn.addEventListener('click', saveLocationFilter);
+
+  const locationBadge = document.createElement('span');
+  locationBadge.id = 'locationFilterBadge';
+  locationBadge.className = 'crawl-location-badge';
+  locationBadge.textContent = 'All locations';
+
+  locationRow.appendChild(locationLabel);
+  locationRow.appendChild(locationInput);
+  locationRow.appendChild(locationSaveBtn);
+  locationRow.appendChild(locationBadge);
+
   crawlContainer.appendChild(mainRow);
   crawlContainer.appendChild(keywordsRow);
+  crawlContainer.appendChild(locationRow);
   document.body.appendChild(crawlContainer);
 
   updatePageCountDisplay();
   updateExcludeKeywordsDisplay();
+  updateLocationFilterDisplay();
 
   crawlButton.addEventListener('click', async () => {
+    if (!requireValidContext()) return;
     console.log('Nút crawl được nhấn, đang lấy số trang...');
-    chrome.storage.local.get(['pageCount', 'excludeKeywords'], async (result) => {
+    chrome.storage.local.get(['pageCount', 'excludeKeywords', 'locationFilter'], async (result) => {
       const maxPages = parseInt(result.pageCount, 10) || 1;
       const firstBatch = Math.min(PAGES_PER_BATCH, maxPages);
 
@@ -485,6 +594,16 @@ function initializeCrawler() {
         .filter(Boolean);
       if (excludeKeywords.length > 0) {
         console.log(`Exclude keywords active: [${excludeKeywords.join(', ')}]`);
+      }
+
+      // Parse location filters
+      const locationFilterRaw = result.locationFilter || '';
+      const locationFilters = locationFilterRaw
+        .split(',')
+        .map(l => l.trim())
+        .filter(Boolean);
+      if (locationFilters.length > 0) {
+        console.log(`Location filter active: [${locationFilters.join(', ')}]`);
       }
 
       console.log(
@@ -505,6 +624,7 @@ function initializeCrawler() {
         const jobs = [['Company Name', 'Job Title', 'Link', 'Salary', 'Location', 'Date Posted', 'Apply Method']];
         const seenJobIds = new Set();
         let excludedCount = 0;
+        let locationFilteredCount = 0;
         let totalPagesLoaded = firstBatch; // pages loaded so far
         let totalProcessed = 0;
 
@@ -587,6 +707,16 @@ function initializeCrawler() {
                 continue;
               }
 
+              // ── Location inclusion check ────────────────────────────────
+              if (!shouldIncludeByLocation(jobData, locationFilters)) {
+                locationFilteredCount++;
+                console.log(
+                  `Việc làm ${globalIndex + 1}: Filtered out (location) — ` +
+                  `"${job_title}" @ "${location}"`
+                );
+                continue;
+              }
+
               pendingJobs.push({
                 element: job,
                 index: globalIndex,
@@ -598,7 +728,8 @@ function initializeCrawler() {
           }
           console.log(
             `Phase 1 done: ${pendingJobs.length} unique jobs extracted ` +
-            `(${excludedCount} excluded by keywords) in ` +
+            `(${excludedCount} excluded by keywords, ` +
+            `${locationFilteredCount} filtered by location) in ` +
             `${Date.now() - phase1Start}ms`
           );
 
@@ -695,15 +826,17 @@ function initializeCrawler() {
           }
         }
 
-        const excludeNote = excludedCount > 0
-          ? ` (${excludedCount} excluded by keywords)`
-          : '';
+        const filterNotes = [];
+        if (excludedCount > 0) filterNotes.push(`${excludedCount} excluded by keywords`);
+        if (locationFilteredCount > 0) filterNotes.push(`${locationFilteredCount} filtered by location`);
+        const filterSummary = filterNotes.length > 0 ? ` (${filterNotes.join(', ')})` : '';
         progressEl.textContent =
-          `✅ Done! ${totalProcessed} jobs processed${excludeNote} in ` +
+          `✅ Done! ${totalProcessed} jobs processed${filterSummary} in ` +
           `${((Date.now() - overallStart) / 1000).toFixed(1)}s`;
         setTimeout(() => progressEl.remove(), 5000);
         console.log(
-          `Crawl complete: ${totalProcessed} jobs (${excludedCount} excluded), ` +
+          `Crawl complete: ${totalProcessed} jobs ` +
+          `(${excludedCount} excluded, ${locationFilteredCount} location-filtered), ` +
           `${totalPagesLoaded} pages, ${Date.now() - overallStart}ms`
         );
 
@@ -759,10 +892,13 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
   document.addEventListener('DOMContentLoaded', initializeCrawler);
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'updatePageCount') {
-    console.log('Nhận được thông điệp updatePageCount từ background');
-    updatePageCountDisplay();
-    sendResponse({ status: 'updated' });
-  }
-});
+if (isExtensionContextValid()) {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!isExtensionContextValid()) return;
+    if (message.action === 'updatePageCount') {
+      console.log('Nhận được thông điệp updatePageCount từ background');
+      updatePageCountDisplay();
+      sendResponse({ status: 'updated' });
+    }
+  });
+}
