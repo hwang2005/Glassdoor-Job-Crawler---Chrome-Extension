@@ -68,13 +68,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.tabs.onCreated.addListener(onCreated);
     chrome.tabs.onUpdated.addListener(onUpdated);
 
-    // Timeout after 8 seconds (shorter – content script handles the fallback)
+    // Timeout after 5 seconds – external sites are captured in 1-2s; this
+    // is generous while still keeping the crawler fast.
     setTimeout(() => {
       if (!captured) {
-        console.warn('captureNewTab: timed out after 8s');
+        console.warn('captureNewTab: timed out after 5s');
         finish(null, 'timeout');
       }
-    }, 8000);
+    }, 5000);
 
     return true; // keep channel open for async sendResponse
   }

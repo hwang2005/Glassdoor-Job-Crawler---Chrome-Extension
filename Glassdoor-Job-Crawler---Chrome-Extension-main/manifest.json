@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Glassdoor Job Crawler",
-  "version": "2.3",
-  "description": "Crawl job listings from Glassdoor with smart apply method detection (text → DOM heuristics → click-capture fallback), save to CSV",
+  "version": "2.4",
+  "description": "Crawl job listings from Glassdoor with batch-optimised crawling and smart apply method detection, save to CSV",
   "permissions": [
     "activeTab",
     "downloads",

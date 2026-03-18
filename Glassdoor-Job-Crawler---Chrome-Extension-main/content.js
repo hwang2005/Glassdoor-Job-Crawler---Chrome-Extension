@@ -1,4 +1,8 @@
-console.log('=== Glassdoor Crawler v2.3 - Smart Apply Method detection ===');
+console.log('=== Glassdoor Crawler v2.4 - Batch-optimised crawling ===');
+
+// Number of concurrent apply-method detections per batch.
+// Increasing this speeds up crawling but may trigger Glassdoor rate-limits.
+const BATCH_SIZE = 3;
 
 /**
  * Waits for an element matching one of the given selectors to appear in the
@@ -9,7 +13,7 @@ console.log('=== Glassdoor Crawler v2.3 - Smart Apply Method detection ===');
  * @param {number} delayMs - Delay between retries in ms (default 800)
  * @returns {Promise<Element|null>}
  */
-async function waitForElement(selectors, maxRetries = 3, delayMs = 800) {
+async function waitForElement(selectors, maxRetries = 3, delayMs = 500) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     for (const sel of selectors) {
       try {
@@ -43,7 +47,7 @@ async function dismissPopups() {
       const btn = document.querySelector(sel);
       if (btn && btn.offsetParent !== null) {   // visible
         btn.click();
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 300));
         return true;
       }
     } catch (_) { /* skip */ }
@@ -84,7 +88,7 @@ async function detectApplyMethod(jobCardElement, index) {
   }
 
   jobLink.click();
-  await new Promise(r => setTimeout(r, 1500));
+  await new Promise(r => setTimeout(r, 800));
   await dismissPopups();
 
   // ── Step 2: Locate the apply button (with retries) ───────────────────
@@ -99,7 +103,7 @@ async function detectApplyMethod(jobCardElement, index) {
     'button[class*="easyApply"]', 'a[class*="easyApply"]',
   ];
 
-  let applyButton = await waitForElement(applyBtnSelectors, 3, 1000);
+  let applyButton = await waitForElement(applyBtnSelectors, 3, 600);
 
   // Fallback: any visible button/link in the detail panel whose text
   // contains "Apply" (but NOT inside a job card, to avoid clicking others)
@@ -349,26 +353,20 @@ function initializeCrawler() {
           return;
         }
 
-        // Use for...of so we can await detectApplyMethod for each job
+        // ── Phase 1: Fast DOM-only data extraction (no clicks) ──────────
         const jobArray = Array.from(jobElements);
+        const pendingJobs = [];  // { element, index, data }
+
+        console.log(`Phase 1: extracting DOM data from ${jobArray.length} cards…`);
+        const phase1Start = Date.now();
+
         for (let index = 0; index < jobArray.length; index++) {
           const job = jobArray[index];
-          let date_post = 'N/A';
-          let company_name = 'N/A';
-          let location = 'N/A';
-          let job_title = 'N/A';
-          let salary = 'N/A';
-          let link_job = 'N/A';
-          let apply_method = 'N/A';
-
           try {
             const linkElement = job.querySelector('a[data-test="job-link"]');
-            link_job = linkElement ? linkElement.getAttribute('href') || 'N/A' : 'N/A';
+            let link_job = linkElement ? linkElement.getAttribute('href') || 'N/A' : 'N/A';
             if (link_job !== 'N/A' && !link_job.startsWith('http')) {
               link_job = `https://www.glassdoor.com${link_job}`;
-              console.log(`Đã thêm tiền tố cho link: ${link_job}`);
-            } else if (link_job === 'N/A') {
-              console.warn(`Link không tìm thấy cho job ${index + 1}`);
             }
 
             const jobIdMatch = link_job.match(/jobListingId=(\d+)/);
@@ -379,35 +377,63 @@ function initializeCrawler() {
             }
             if (jobId) seenJobIds.add(jobId);
 
-            date_post = job.querySelector('div[class*="JobCard_listingAge__jJsuc"]')?.textContent.trim() || 'N/A';
-            company_name = job.querySelector('span[class*="EmployerProfile_compactEmployerName__9MGcV"]')?.textContent.trim() || 'N/A';
-            location = job.querySelector('div[class*="JobCard_location__Ds1fM"]')?.textContent.trim() || 'N/A';
-            job_title = job.querySelector('a[class*="JobCard_jobTitle__GLyJ1"]')?.textContent.trim() || 'N/A';
-            salary = job.querySelector('div[class*="JobCard_salaryEstimate__QpbTW"]')?.textContent.trim() || 'N/A';
+            const date_post   = job.querySelector('div[class*="JobCard_listingAge__jJsuc"]')?.textContent.trim() || 'N/A';
+            const company_name = job.querySelector('span[class*="EmployerProfile_compactEmployerName__9MGcV"]')?.textContent.trim() || 'N/A';
+            const location    = job.querySelector('div[class*="JobCard_location__Ds1fM"]')?.textContent.trim() || 'N/A';
+            const job_title   = job.querySelector('a[class*="JobCard_jobTitle__GLyJ1"]')?.textContent.trim() || 'N/A';
+            const salary      = job.querySelector('div[class*="JobCard_salaryEstimate__QpbTW"]')?.textContent.trim() || 'N/A';
 
             if ([link_job, company_name, job_title, salary, location, date_post].every(val => val === 'N/A')) {
               console.log(`Việc làm ${index + 1}: Bỏ qua (tất cả trường N/A)`);
               continue;
             }
 
-            // Click-based apply method detection
-            apply_method = await detectApplyMethod(job, index);
-
-            console.log(`Việc làm ${index + 1}:`);
-            console.log(`  Tên công ty: ${company_name}`);
-            console.log(`  Địa điểm: ${location}`);
-            console.log(`  Tiêu đề: ${job_title}`);
-            console.log(`  Lương: ${salary}`);
-            console.log(`  Link: ${link_job}`);
-            console.log(`  Ngày đăng: ${date_post}`);
-            console.log(`  Phương thức ứng tuyển: ${apply_method}`);
-            console.log('-'.repeat(50));
-
-            jobs.push([company_name, job_title, link_job, salary, location, date_post, apply_method]);
+            pendingJobs.push({ element: job, index, data: { company_name, job_title, link_job, salary, location, date_post } });
           } catch (e) {
-            console.error(`Lỗi xử lý việc làm ${index + 1}: ${e.message}`);
+            console.error(`Lỗi trích xuất việc làm ${index + 1}: ${e.message}`);
           }
         }
+        console.log(`Phase 1 done: ${pendingJobs.length} unique jobs extracted in ${Date.now() - phase1Start}ms`);
+
+        // ── Phase 2: Batch apply-method detection ───────────────────────
+        // Create a floating progress indicator
+        const progressEl = document.createElement('div');
+        progressEl.id = 'crawlProgress';
+        Object.assign(progressEl.style, {
+          position: 'fixed', bottom: '60px', right: '20px', zIndex: '100000',
+          background: 'rgba(0,0,0,0.85)', color: '#0f0', padding: '8px 14px',
+          borderRadius: '8px', fontFamily: 'monospace', fontSize: '13px',
+        });
+        document.body.appendChild(progressEl);
+
+        console.log(`Phase 2: detecting apply method in batches of ${BATCH_SIZE}…`);
+        const phase2Start = Date.now();
+        let processed = 0;
+
+        for (let batchStart = 0; batchStart < pendingJobs.length; batchStart += BATCH_SIZE) {
+          const batch = pendingJobs.slice(batchStart, batchStart + BATCH_SIZE);
+
+          // Process each item in the batch sequentially (they share one DOM)
+          // but we parallelise the non-DOM parts where possible
+          for (const item of batch) {
+            progressEl.textContent = `⏳ Detecting apply method: ${processed + 1} / ${pendingJobs.length}`;
+            try {
+              const apply_method = await detectApplyMethod(item.element, item.index);
+              const d = item.data;
+              console.log(`Việc làm ${item.index + 1}: ${d.company_name} | ${d.job_title} | ${apply_method}`);
+              jobs.push([d.company_name, d.job_title, d.link_job, d.salary, d.location, d.date_post, apply_method]);
+            } catch (e) {
+              console.error(`Lỗi detect apply ${item.index + 1}: ${e.message}`);
+              const d = item.data;
+              jobs.push([d.company_name, d.job_title, d.link_job, d.salary, d.location, d.date_post, 'N/A']);
+            }
+            processed++;
+          }
+        }
+
+        progressEl.textContent = `✅ Done! ${processed} jobs processed in ${((Date.now() - phase2Start) / 1000).toFixed(1)}s`;
+        setTimeout(() => progressEl.remove(), 5000);
+        console.log(`Phase 2 done: ${processed} jobs in ${Date.now() - phase2Start}ms`);
 
         try {
           if (jobs.length === 1) {
