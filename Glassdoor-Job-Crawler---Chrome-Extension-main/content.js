@@ -1,8 +1,13 @@
-console.log('=== Glassdoor Crawler v2.4 - Batch-optimised crawling ===');
+console.log('=== Glassdoor Crawler v2.6 - Chunked load→crawl with page cap ===');
 
 // Number of concurrent apply-method detections per batch.
 // Increasing this speeds up crawling but may trigger Glassdoor rate-limits.
 const BATCH_SIZE = 3;
+
+// Number of "Show more jobs" clicks per load cycle.
+// After loading this many pages the crawler processes the new cards before
+// loading more.  Keeping this small avoids overwhelming the DOM.
+const PAGES_PER_BATCH = 5;
 
 /**
  * Waits for an element matching one of the given selectors to appear in the
@@ -225,6 +230,62 @@ async function detectApplyMethod(jobCardElement, index) {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Clicks "Show more jobs" once and waits for new cards to load.
+ *
+ * @returns {Promise<boolean>} true if the button was found and clicked,
+ *                             false if no more jobs to load.
+ */
+async function clickShowMoreJobs() {
+  window.scrollTo(0, document.body.scrollHeight);
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  const loadMoreButton = document.querySelector(
+    'button[data-test="load-more"][data-loading="false"]'
+  );
+  if (!loadMoreButton) return false;
+
+  console.log('Tìm thấy nút "Show more jobs", đang nhấn...');
+  loadMoreButton.click();
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // Dismiss any popup that may appear after clicking
+  const closePopupButton = document.querySelector(
+    'button.icon-button_IconButton__nMTOc[aria-label="Cancel"]'
+  );
+  if (closePopupButton) {
+    console.log('Tìm thấy popup, nhấn nút hủy...');
+    closePopupButton.click();
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  return true;
+}
+
+/**
+ * Checks whether the "Show more jobs" button is still present on the page.
+ *
+ * @returns {boolean}
+ */
+function hasShowMoreButton() {
+  return !!document.querySelector('button[data-test="load-more"]');
+}
+
+/**
+ * Returns all job card elements currently in the DOM.
+ */
+function getAllJobCards() {
+  return document.querySelectorAll('div[class="JobCard_jobCardContainer__arQlW"]');
+}
+
+/**
+ * Loads `pages` batches of additional job cards by clicking "Show more jobs"
+ * repeatedly.  Returns the total list of job cards in the DOM afterwards.
+ *
+ * @param {number} pages  - Number of times to click "Show more jobs"
+ * @param {number} timeout - Overall timeout in ms
+ * @returns {Promise<NodeListOf<Element>>}
+ */
 async function scrollAndLoadMore(pages, timeout = 180000) {
   console.log(`Bắt đầu crawl ${pages} trang...`);
   const start = Date.now();
@@ -235,35 +296,29 @@ async function scrollAndLoadMore(pages, timeout = 180000) {
   if (pageLabel) pageLabel.textContent = `Còn: ${remainingPages} trang`;
 
   while (currentPage < pages && Date.now() - start < timeout) {
-    window.scrollTo(0, document.body.scrollHeight);
-    console.log(`Đã cuộn xuống cuối trang ${currentPage + 1}`);
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    const loadMoreButton = document.querySelector('button[data-test="load-more"][data-loading="false"]');
-    if (loadMoreButton) {
-      console.log(`Tìm thấy nút "Show more jobs" cho trang ${currentPage + 1}, đang nhấn...`);
-      loadMoreButton.click();
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      const closePopupButton = document.querySelector('button.icon-button_IconButton__nMTOc[aria-label="Cancel"]');
-      if (closePopupButton) {
-        console.log('Tìm thấy popup, nhấn nút hủy...');
-        closePopupButton.click();
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-    } else {
-      console.log(`Không tìm thấy nút "Show more jobs" ở trang ${currentPage + 1}, có thể đã tải hết hoặc lỗi selector`);
+    const clicked = await clickShowMoreJobs();
+    if (!clicked) {
+      console.log(
+        `Không tìm thấy nút "Show more jobs" ở trang ${currentPage + 1}, ` +
+        'có thể đã tải hết hoặc lỗi selector'
+      );
       break;
     }
+
     currentPage++;
     remainingPages--;
+    console.log(`Đã cuộn và nhấn "Show more jobs" cho trang ${currentPage}`);
     if (pageLabel) pageLabel.textContent = `Còn: ${remainingPages} trang`;
-    if (currentPage === pages - 1) console.log('Đã crawl đủ số trang yêu cầu');
+    if (currentPage === pages) console.log('Đã crawl đủ số trang yêu cầu');
   }
 
-  const jobCards = document.querySelectorAll('div[class="JobCard_jobCardContainer__arQlW"]');
+  const jobCards = getAllJobCards();
   if (jobCards.length === 0) {
-    throw new Error('Không tìm thấy job card nào sau khi tải. Hãy đảm bảo bạn đang ở trang danh sách việc làm (https://www.glassdoor.com/Job/*) và đã đăng nhập nếu cần.');
+    throw new Error(
+      'Không tìm thấy job card nào sau khi tải. Hãy đảm bảo bạn đang ở ' +
+      'trang danh sách việc làm (https://www.glassdoor.com/Job/*) và đã ' +
+      'đăng nhập nếu cần.'
+    );
   }
   console.log(`Tìm thấy ${jobCards.length} job card sau ${Date.now() - start}ms`);
   return jobCards;
@@ -287,6 +342,48 @@ function savePageCount() {
     console.log(`Đã lưu số trang ${pageCount} vào storage`);
     updatePageCountDisplay();
   });
+}
+
+/**
+ * Loads the exclude-keywords string from storage and populates the input.
+ */
+function updateExcludeKeywordsDisplay() {
+  chrome.storage.local.get(['excludeKeywords'], (result) => {
+    const keywords = result.excludeKeywords || '';
+    const input = document.getElementById('excludeKeywordsInput');
+    if (input) input.value = keywords;
+    const badge = document.getElementById('excludeKeywordsBadge');
+    if (badge) {
+      const count = keywords ? keywords.split(',').map(k => k.trim()).filter(Boolean).length : 0;
+      badge.textContent = count > 0 ? `🚫 ${count} keyword(s)` : 'No filter';
+      badge.style.backgroundColor = count > 0 ? '#e53935' : '#757575';
+    }
+  });
+}
+
+/**
+ * Saves the comma-separated exclude-keywords string to storage.
+ */
+function saveExcludeKeywords() {
+  const input = document.getElementById('excludeKeywordsInput');
+  const raw = input ? input.value : '';
+  // Normalise: trim each keyword, drop empties, rejoin
+  const cleaned = raw.split(',').map(k => k.trim()).filter(Boolean).join(', ');
+  chrome.storage.local.set({ excludeKeywords: cleaned }, () => {
+    console.log(`Exclude keywords saved: "${cleaned}"`);
+    if (input) input.value = cleaned;
+    updateExcludeKeywordsDisplay();
+  });
+}
+
+/**
+ * Returns true if the job should be excluded based on the keyword list.
+ * Checks job_title only (case-insensitive).
+ */
+function shouldExcludeJob(jobData, excludeKeywords) {
+  if (!excludeKeywords || excludeKeywords.length === 0) return false;
+  const title = (jobData.job_title || '').toLowerCase();
+  return excludeKeywords.some(kw => title.includes(kw.toLowerCase()));
 }
 
 function initializeCrawler() {
@@ -327,76 +424,91 @@ function initializeCrawler() {
   pageLabel.style.color = 'white';
   pageLabel.style.fontSize = '16px';
 
-  crawlContainer.appendChild(crawlButton);
-  crawlContainer.appendChild(pageInput);
-  crawlContainer.appendChild(saveButton);
-  crawlContainer.appendChild(pageLabel);
+  // ── Exclude-keywords row ──────────────────────────────────────────────
+  const keywordsRow = document.createElement('div');
+  keywordsRow.className = 'crawl-keywords-row';
+
+  const keywordsLabel = document.createElement('label');
+  keywordsLabel.textContent = 'Exclude keywords:';
+  keywordsLabel.setAttribute('for', 'excludeKeywordsInput');
+  keywordsLabel.className = 'crawl-keywords-label';
+
+  const keywordsInput = document.createElement('input');
+  keywordsInput.id = 'excludeKeywordsInput';
+  keywordsInput.type = 'text';
+  keywordsInput.placeholder = 'e.g. intern, senior, remote';
+  keywordsInput.className = 'crawl-keywords-input';
+
+  const keywordsSaveBtn = document.createElement('button');
+  keywordsSaveBtn.textContent = 'Save';
+  keywordsSaveBtn.id = 'saveExcludeKeywordsBtn';
+  keywordsSaveBtn.className = 'crawl-keywords-save';
+  keywordsSaveBtn.setAttribute('aria-label', 'Save exclude keywords');
+  keywordsSaveBtn.addEventListener('click', saveExcludeKeywords);
+
+  const keywordsBadge = document.createElement('span');
+  keywordsBadge.id = 'excludeKeywordsBadge';
+  keywordsBadge.className = 'crawl-keywords-badge';
+  keywordsBadge.textContent = 'No filter';
+
+  keywordsRow.appendChild(keywordsLabel);
+  keywordsRow.appendChild(keywordsInput);
+  keywordsRow.appendChild(keywordsSaveBtn);
+  keywordsRow.appendChild(keywordsBadge);
+
+  // ── Assemble the main row (page count controls) ───────────────────────
+  const mainRow = document.createElement('div');
+  mainRow.className = 'crawl-main-row';
+  mainRow.appendChild(crawlButton);
+  mainRow.appendChild(pageInput);
+  mainRow.appendChild(saveButton);
+  mainRow.appendChild(pageLabel);
+
+  crawlContainer.appendChild(mainRow);
+  crawlContainer.appendChild(keywordsRow);
   document.body.appendChild(crawlContainer);
 
   updatePageCountDisplay();
+  updateExcludeKeywordsDisplay();
 
   crawlButton.addEventListener('click', async () => {
     console.log('Nút crawl được nhấn, đang lấy số trang...');
-    chrome.storage.local.get(['pageCount'], async (result) => {
-      const pageCount = parseInt(result.pageCount, 10) || 1;
-      console.log(`Đang crawl ${pageCount} trang...`);
+    chrome.storage.local.get(['pageCount', 'excludeKeywords'], async (result) => {
+      const maxPages = parseInt(result.pageCount, 10) || 1;
+      const firstBatch = Math.min(PAGES_PER_BATCH, maxPages);
+
+      // Parse exclude keywords
+      const excludeKeywordsRaw = result.excludeKeywords || '';
+      const excludeKeywords = excludeKeywordsRaw
+        .split(',')
+        .map(k => k.trim())
+        .filter(Boolean);
+      if (excludeKeywords.length > 0) {
+        console.log(`Exclude keywords active: [${excludeKeywords.join(', ')}]`);
+      }
+
+      console.log(
+        `Đang crawl tối đa ${maxPages} trang ` +
+        `(${PAGES_PER_BATCH} trang/batch)...`
+      );
 
       try {
-        const jobElements = await scrollAndLoadMore(pageCount);
-        console.log('Bắt đầu crawl...');
-        const jobs = [['Company Name', 'Job Title', 'Link', 'Salary', 'Location', 'Date Posted', 'Apply Method']];
-        const seenJobIds = new Set();
-
-        if (!jobElements.length) {
+        // ── Initial load ────────────────────────────────────────────────
+        const initialCards = await scrollAndLoadMore(firstBatch);
+        if (!initialCards.length) {
           console.error('Không tìm thấy job card nào trên trang');
           alert('Không tìm thấy việc làm! Hãy đảm bảo bạn đang ở trang danh sách việc làm.');
           return;
         }
 
-        // ── Phase 1: Fast DOM-only data extraction (no clicks) ──────────
-        const jobArray = Array.from(jobElements);
-        const pendingJobs = [];  // { element, index, data }
+        console.log('Bắt đầu crawl...');
+        const jobs = [['Company Name', 'Job Title', 'Link', 'Salary', 'Location', 'Date Posted', 'Apply Method']];
+        const seenJobIds = new Set();
+        let excludedCount = 0;
+        let totalPagesLoaded = firstBatch; // pages loaded so far
+        let totalProcessed = 0;
 
-        console.log(`Phase 1: extracting DOM data from ${jobArray.length} cards…`);
-        const phase1Start = Date.now();
-
-        for (let index = 0; index < jobArray.length; index++) {
-          const job = jobArray[index];
-          try {
-            const linkElement = job.querySelector('a[data-test="job-link"]');
-            let link_job = linkElement ? linkElement.getAttribute('href') || 'N/A' : 'N/A';
-            if (link_job !== 'N/A' && !link_job.startsWith('http')) {
-              link_job = `https://www.glassdoor.com${link_job}`;
-            }
-
-            const jobIdMatch = link_job.match(/jobListingId=(\d+)/);
-            const jobId = jobIdMatch ? jobIdMatch[1] : null;
-            if (jobId && seenJobIds.has(jobId)) {
-              console.log(`Bỏ qua việc làm trùng lặp ID: ${jobId}`);
-              continue;
-            }
-            if (jobId) seenJobIds.add(jobId);
-
-            const date_post   = job.querySelector('div[class*="JobCard_listingAge__jJsuc"]')?.textContent.trim() || 'N/A';
-            const company_name = job.querySelector('span[class*="EmployerProfile_compactEmployerName__9MGcV"]')?.textContent.trim() || 'N/A';
-            const location    = job.querySelector('div[class*="JobCard_location__Ds1fM"]')?.textContent.trim() || 'N/A';
-            const job_title   = job.querySelector('a[class*="JobCard_jobTitle__GLyJ1"]')?.textContent.trim() || 'N/A';
-            const salary      = job.querySelector('div[class*="JobCard_salaryEstimate__QpbTW"]')?.textContent.trim() || 'N/A';
-
-            if ([link_job, company_name, job_title, salary, location, date_post].every(val => val === 'N/A')) {
-              console.log(`Việc làm ${index + 1}: Bỏ qua (tất cả trường N/A)`);
-              continue;
-            }
-
-            pendingJobs.push({ element: job, index, data: { company_name, job_title, link_job, salary, location, date_post } });
-          } catch (e) {
-            console.error(`Lỗi trích xuất việc làm ${index + 1}: ${e.message}`);
-          }
-        }
-        console.log(`Phase 1 done: ${pendingJobs.length} unique jobs extracted in ${Date.now() - phase1Start}ms`);
-
-        // ── Phase 2: Batch apply-method detection ───────────────────────
-        // Create a floating progress indicator
+        // ── Create floating progress indicator ──────────────────────────
         const progressEl = document.createElement('div');
         progressEl.id = 'crawlProgress';
         Object.assign(progressEl.style, {
@@ -406,35 +518,196 @@ function initializeCrawler() {
         });
         document.body.appendChild(progressEl);
 
-        console.log(`Phase 2: detecting apply method in batches of ${BATCH_SIZE}…`);
-        const phase2Start = Date.now();
-        let processed = 0;
+        const overallStart = Date.now();
+        let processedCardCount = 0; // index of the last card we've processed
 
-        for (let batchStart = 0; batchStart < pendingJobs.length; batchStart += BATCH_SIZE) {
-          const batch = pendingJobs.slice(batchStart, batchStart + BATCH_SIZE);
+        // ── Iterative load → crawl loop ─────────────────────────────────
+        // We keep going as long as:
+        //   1. There are new cards to process, AND
+        //   2. The "Show more jobs" button still exists (more jobs available),
+        //      OR we haven't processed all the cards loaded so far.
+        let continueLoading = true;
 
-          // Process each item in the batch sequentially (they share one DOM)
-          // but we parallelise the non-DOM parts where possible
-          for (const item of batch) {
-            progressEl.textContent = `⏳ Detecting apply method: ${processed + 1} / ${pendingJobs.length}`;
+        while (continueLoading) {
+          // Grab all cards currently in the DOM
+          const allCards = getAllJobCards();
+          const newCards = Array.from(allCards).slice(processedCardCount);
+
+          if (newCards.length === 0) {
+            console.log('Không có job card mới nào để xử lý.');
+            break;
+          }
+
+          console.log(
+            `\n── Batch: processing cards ${processedCardCount + 1}–` +
+            `${processedCardCount + newCards.length} ──`
+          );
+
+          // ── Phase 1: Fast DOM-only data extraction ────────────────────
+          const pendingJobs = [];
+          const phase1Start = Date.now();
+
+          for (let i = 0; i < newCards.length; i++) {
+            const globalIndex = processedCardCount + i;
+            const job = newCards[i];
             try {
-              const apply_method = await detectApplyMethod(item.element, item.index);
-              const d = item.data;
-              console.log(`Việc làm ${item.index + 1}: ${d.company_name} | ${d.job_title} | ${apply_method}`);
-              jobs.push([d.company_name, d.job_title, d.link_job, d.salary, d.location, d.date_post, apply_method]);
+              const linkElement = job.querySelector('a[data-test="job-link"]');
+              let link_job = linkElement ? linkElement.getAttribute('href') || 'N/A' : 'N/A';
+              if (link_job !== 'N/A' && !link_job.startsWith('http')) {
+                link_job = `https://www.glassdoor.com${link_job}`;
+              }
+
+              const jobIdMatch = link_job.match(/jobListingId=(\d+)/);
+              const jobId = jobIdMatch ? jobIdMatch[1] : null;
+              if (jobId && seenJobIds.has(jobId)) {
+                console.log(`Bỏ qua việc làm trùng lặp ID: ${jobId}`);
+                continue;
+              }
+              if (jobId) seenJobIds.add(jobId);
+
+              const date_post    = job.querySelector('div[class*="JobCard_listingAge__jJsuc"]')?.textContent.trim() || 'N/A';
+              const company_name = job.querySelector('span[class*="EmployerProfile_compactEmployerName__9MGcV"]')?.textContent.trim() || 'N/A';
+              const location     = job.querySelector('div[class*="JobCard_location__Ds1fM"]')?.textContent.trim() || 'N/A';
+              const job_title    = job.querySelector('a[class*="JobCard_jobTitle__GLyJ1"]')?.textContent.trim() || 'N/A';
+              const salary       = job.querySelector('div[class*="JobCard_salaryEstimate__QpbTW"]')?.textContent.trim() || 'N/A';
+
+              if ([link_job, company_name, job_title, salary, location, date_post].every(val => val === 'N/A')) {
+                console.log(`Việc làm ${globalIndex + 1}: Bỏ qua (tất cả trường N/A)`);
+                continue;
+              }
+
+              // ── Keyword exclusion check ────────────────────────────────
+              const jobData = { company_name, job_title, link_job, salary, location, date_post };
+              if (shouldExcludeJob(jobData, excludeKeywords)) {
+                excludedCount++;
+                console.log(
+                  `Việc làm ${globalIndex + 1}: Excluded (keyword match) — ` +
+                  `"${job_title}" @ "${company_name}"`
+                );
+                continue;
+              }
+
+              pendingJobs.push({
+                element: job,
+                index: globalIndex,
+                data: jobData,
+              });
             } catch (e) {
-              console.error(`Lỗi detect apply ${item.index + 1}: ${e.message}`);
-              const d = item.data;
-              jobs.push([d.company_name, d.job_title, d.link_job, d.salary, d.location, d.date_post, 'N/A']);
+              console.error(`Lỗi trích xuất việc làm ${globalIndex + 1}: ${e.message}`);
             }
-            processed++;
+          }
+          console.log(
+            `Phase 1 done: ${pendingJobs.length} unique jobs extracted ` +
+            `(${excludedCount} excluded by keywords) in ` +
+            `${Date.now() - phase1Start}ms`
+          );
+
+          // ── Phase 2: Batch apply-method detection ─────────────────────
+          console.log(`Phase 2: detecting apply method in batches of ${BATCH_SIZE}…`);
+          const phase2Start = Date.now();
+
+          for (let batchStart = 0; batchStart < pendingJobs.length; batchStart += BATCH_SIZE) {
+            const batch = pendingJobs.slice(batchStart, batchStart + BATCH_SIZE);
+
+            for (const item of batch) {
+              totalProcessed++;
+              progressEl.textContent =
+                `⏳ Detecting apply method: ${totalProcessed} ` +
+                `(card ${item.index + 1}) …`;
+              try {
+                const apply_method = await detectApplyMethod(item.element, item.index);
+                const d = item.data;
+                console.log(
+                  `Việc làm ${item.index + 1}: ${d.company_name} | ` +
+                  `${d.job_title} | ${apply_method}`
+                );
+                jobs.push([
+                  d.company_name, d.job_title, d.link_job,
+                  d.salary, d.location, d.date_post, apply_method,
+                ]);
+              } catch (e) {
+                console.error(`Lỗi detect apply ${item.index + 1}: ${e.message}`);
+                const d = item.data;
+                jobs.push([
+                  d.company_name, d.job_title, d.link_job,
+                  d.salary, d.location, d.date_post, 'N/A',
+                ]);
+              }
+            }
+          }
+
+          console.log(
+            `Phase 2 done: ${pendingJobs.length} jobs in ` +
+            `${Date.now() - phase2Start}ms`
+          );
+
+          // Mark these cards as processed
+          processedCardCount += newCards.length;
+
+          // ── Check whether to load more ────────────────────────────────
+          // Continue if:
+          //   - totalPagesLoaded < maxPages (haven't hit the page cap), AND
+          //   - the "Show more jobs" button is still present.
+          if (totalPagesLoaded >= maxPages) {
+            console.log(
+              `Đã đạt giới hạn trang: ${totalPagesLoaded}/${maxPages}. ` +
+              'Dừng tải thêm.'
+            );
+            continueLoading = false;
+          } else if (hasShowMoreButton()) {
+            const remaining = maxPages - totalPagesLoaded;
+            const nextBatch = Math.min(PAGES_PER_BATCH, remaining);
+            console.log(
+              `"Show more jobs" button still present. ` +
+              `Pages loaded: ${totalPagesLoaded}/${maxPages}. ` +
+              `Loading next batch of ${nextBatch} pages…`
+            );
+
+            const pageLabel = document.getElementById('pageLabel');
+
+            // Load the next small batch of pages
+            let additionalLoaded = 0;
+            for (let p = 0; p < nextBatch; p++) {
+              const clicked = await clickShowMoreJobs();
+              if (!clicked) {
+                console.log('Không còn nút "Show more jobs", dừng tải thêm.');
+                continueLoading = false;
+                break;
+              }
+              additionalLoaded++;
+              totalPagesLoaded++;
+              if (pageLabel) {
+                pageLabel.textContent =
+                  `Đã tải: ${totalPagesLoaded}/${maxPages} trang`;
+              }
+            }
+
+            if (additionalLoaded === 0) {
+              continueLoading = false;
+            }
+            // If we loaded more pages, the while-loop will pick up new cards
+          } else {
+            console.log(
+              'Nút "Show more jobs" không còn xuất hiện. ' +
+              'Đã tải hết tất cả job cards.'
+            );
+            continueLoading = false;
           }
         }
 
-        progressEl.textContent = `✅ Done! ${processed} jobs processed in ${((Date.now() - phase2Start) / 1000).toFixed(1)}s`;
+        const excludeNote = excludedCount > 0
+          ? ` (${excludedCount} excluded by keywords)`
+          : '';
+        progressEl.textContent =
+          `✅ Done! ${totalProcessed} jobs processed${excludeNote} in ` +
+          `${((Date.now() - overallStart) / 1000).toFixed(1)}s`;
         setTimeout(() => progressEl.remove(), 5000);
-        console.log(`Phase 2 done: ${processed} jobs in ${Date.now() - phase2Start}ms`);
+        console.log(
+          `Crawl complete: ${totalProcessed} jobs (${excludedCount} excluded), ` +
+          `${totalPagesLoaded} pages, ${Date.now() - overallStart}ms`
+        );
 
+        // ── Export CSV ──────────────────────────────────────────────────
         try {
           if (jobs.length === 1) {
             console.error('Không tìm thấy việc làm hợp lệ để lưu vào CSV');

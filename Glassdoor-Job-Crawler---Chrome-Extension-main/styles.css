@@ -4,12 +4,19 @@
   right: 10px;
   z-index: 9999;
   display: flex;
-  align-items: center;
-  gap: 10px; /* Khoảng cách giữa các thành phần */
+  flex-direction: column;
+  gap: 8px;
   background-color: #ffffff;
   padding: 10px;
-  border-radius: 4px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  max-width: 520px;
+}
+
+.crawl-main-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 #crawlButton {
@@ -50,4 +57,57 @@
   color: white;
   border-radius: 4px;
   font-size: 16px;
+}
+
+/* ── Exclude-keywords row ─────────────────────────────── */
+.crawl-keywords-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.crawl-keywords-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  white-space: nowrap;
+}
+
+.crawl-keywords-input {
+  flex: 1;
+  min-width: 140px;
+  padding: 5px 8px;
+  font-size: 13px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.crawl-keywords-input:focus {
+  border-color: #4CAF50;
+  box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+}
+
+.crawl-keywords-save {
+  padding: 5px 10px;
+  font-size: 13px;
+  background-color: #1976d2;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+.crawl-keywords-save:hover {
+  background-color: #1565c0;
+}
+
+.crawl-keywords-badge {
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #fff;
+  background-color: #757575;
+  border-radius: 12px;
+  white-space: nowrap;
 }
